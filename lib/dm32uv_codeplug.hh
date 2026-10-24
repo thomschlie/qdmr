@@ -58,6 +58,9 @@ public:
     /** Returns the size of the element. */
     static constexpr unsigned int size() { return 0x0030; }
 
+    /** Returns @c false for an empty (all zero) channel record. The CPS can leave such a record
+     * within the channel count. */
+    bool isValid() const override;
     void clear() override;
 
     /** Returns the channel name. */

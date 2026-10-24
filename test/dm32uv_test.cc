@@ -611,6 +611,120 @@ DM32UVTest::testDanglingChannelContact() {
 }
 
 
+void
+DM32UVTest::testEmptyChannelAtEnd() {
+  Config config;
+  config.radioIDs()->add(new DMRRadioID("test", 123456));
+  auto ch1 = new FMChannel(); ch1->setName("CH1");
+  ch1->setRXFrequency(Frequency::fromMHz(439.1)); ch1->setTXFrequency(Frequency::fromMHz(439.1));
+  auto ch2 = new FMChannel(); ch2->setName("CH2");
+  ch2->setRXFrequency(Frequency::fromMHz(439.2)); ch2->setTXFrequency(Frequency::fromMHz(439.2));
+  config.channelList()->add(ch1); config.channelList()->add(ch2);
+
+  DM32UVCodeplug codeplug; ErrorStack err;
+  if (! codeplug.encode(&config, Codeplug::Flags(), err)) {
+    QFAIL(QString("Cannot encode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+
+  // As the CPS leaves it: the count includes a third, all zero record
+  DM32UVCodeplug::ChannelElement(codeplug.data(0x12010 + 2*0x30)).clear();
+  DM32UVCodeplug::ChannelBankElement(codeplug.data(0x12000)).setChannelCount(3);
+
+  Config decoded;
+  if (! codeplug.decode(&decoded, err)) {
+    QFAIL(QString("Cannot decode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+  QCOMPARE(decoded.channelList()->count(), 2);
+  QCOMPARE(decoded.channelList()->channel(1)->name(), QString("CH2"));
+  // No channel at 0 Hz is left for verify to report
+  RadioLimitContext originalIssues, decodedIssues;
+  DM32UVLimits().verifyConfig(&config, originalIssues);
+  DM32UVLimits().verifyConfig(&decoded, decodedIssues);
+  QCOMPARE(decodedIssues.count(), originalIssues.count());
+
+  // Encoded again, the count drops the empty record
+  DM32UVCodeplug reencoded;
+  if (! reencoded.encode(&decoded, Codeplug::Flags(), err)) {
+    QFAIL(QString("Cannot re-encode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+  QCOMPARE(DM32UVCodeplug::ChannelBankElement(reencoded.data(0x12000)).channelCount(), 2u);
+}
+
+
+void
+DM32UVTest::testEmptyChannelInMiddle() {
+  Config config;
+  config.radioIDs()->add(new DMRRadioID("test", 123456));
+  auto cnt1 = new DMRContact(DMRContact::GroupCall, "Group 1", 91);
+  auto cnt3 = new DMRContact(DMRContact::GroupCall, "Group 3", 93);
+  config.contacts()->add(cnt1); config.contacts()->add(cnt3);
+  auto ch1 = new DMRChannel(); ch1->setName("CH1"); ch1->setContact(cnt1);
+  ch1->setRXFrequency(Frequency::fromMHz(439.1)); ch1->setTXFrequency(Frequency::fromMHz(439.1));
+  auto ch2 = new DMRChannel(); ch2->setName("CH2"); ch2->setContact(cnt1);
+  ch2->setRXFrequency(Frequency::fromMHz(439.2)); ch2->setTXFrequency(Frequency::fromMHz(439.2));
+  auto ch3 = new DMRChannel(); ch3->setName("CH3"); ch3->setContact(cnt3);
+  ch3->setRXFrequency(Frequency::fromMHz(439.3)); ch3->setTXFrequency(Frequency::fromMHz(439.3));
+  config.channelList()->add(ch1); config.channelList()->add(ch2); config.channelList()->add(ch3);
+  auto zone = new Zone("Zone");
+  zone->A()->add(ch1); zone->A()->add(ch2); zone->A()->add(ch3);
+  config.zones()->add(zone);
+  auto scan = new ScanList("Scan");
+  scan->addChannel(ch1); scan->addChannel(ch2); scan->addChannel(ch3);
+  scan->setPrimaryChannel(ch2);
+  config.scanlists()->add(scan);
+
+  DM32UVCodeplug codeplug; ErrorStack err;
+  if (! codeplug.encode(&config, Codeplug::Flags(), err)) {
+    QFAIL(QString("Cannot encode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+
+  // The second record is emptied; the zone and the scan list still point at it
+  DM32UVCodeplug::ChannelElement(codeplug.data(0x12010 + 1*0x30)).clear();
+
+  Config decoded;
+  if (! codeplug.decode(&decoded, err)) {
+    QFAIL(QString("Cannot decode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+  QCOMPARE(decoded.channelList()->count(), 2);
+  auto dch1 = decoded.channelList()->channel(0)->as<DMRChannel>();
+  auto dch3 = decoded.channelList()->channel(1)->as<DMRChannel>();
+  QCOMPARE(dch1->name(), QString("CH1"));
+  QCOMPARE(dch3->name(), QString("CH3"));
+  // The extensions stay with their channels
+  QCOMPARE(dch1->contact()->name(), QString("Group 1"));
+  QCOMPARE(dch3->contact()->name(), QString("Group 3"));
+  // References to the empty record are dropped
+  QCOMPARE(decoded.zones()->zone(0)->A()->count(), 2);
+  QVERIFY(decoded.zones()->zone(0)->A()->get(1) == dch3);
+  auto dscan = decoded.scanlists()->scanlist(0);
+  QCOMPARE(dscan->count(), 2);
+  QVERIFY(dscan->channel(1) == dch3);
+  QVERIFY(nullptr == dscan->primaryChannel());
+
+  // Encoded again without a gap: the zone points at the third channel's new index
+  DM32UVCodeplug reencoded;
+  if (! reencoded.encode(&decoded, Codeplug::Flags(), err)) {
+    QFAIL(QString("Cannot re-encode codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+  QCOMPARE(DM32UVCodeplug::ChannelBankElement(reencoded.data(0x12000)).channelCount(), 2u);
+  Config again;
+  if (! reencoded.decode(&again, err)) {
+    QFAIL(QString("Cannot decode re-encoded codeplug for BTECH DM32UV: %1")
+            .arg(err.format()).toStdString().c_str());
+  }
+  QCOMPARE(again.channelList()->count(), 2);
+  QCOMPARE(again.zones()->zone(0)->A()->count(), 2);
+  QCOMPARE(again.channelList()->channel(1)->as<DMRChannel>()->contact()->name(),
+           QString("Group 3"));
+}
+
+
 QTEST_GUILESS_MAIN(DM32UVTest)
 
 

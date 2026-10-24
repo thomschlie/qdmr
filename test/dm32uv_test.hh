@@ -45,6 +45,10 @@ private slots:
   void testRoamingDefaults();
   /** A channel whose contact index points at no contact decodes without a contact. */
   void testDanglingChannelContact();
+  /** An empty channel record at the end of the channel list is skipped. */
+  void testEmptyChannelAtEnd();
+  /** An empty channel record within the channel list is skipped, references to it are dropped. */
+  void testEmptyChannelInMiddle();
 };
 
 #endif // DR1801TEST_HH

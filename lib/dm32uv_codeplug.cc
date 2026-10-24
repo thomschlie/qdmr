@@ -33,6 +33,16 @@ DM32UVCodeplug::ChannelElement::ChannelElement(uint8_t *ptr)
   // pass...
 }
 
+bool
+DM32UVCodeplug::ChannelElement::isValid() const {
+  if (! Element::isValid())
+    return false;
+  for (unsigned int i=0; i<_size; i++)
+    if (0 != _data[i])
+      return true;
+  return false;
+}
+
 void
 DM32UVCodeplug::ChannelElement::clear() {
   fill(0x00);
@@ -1421,10 +1431,11 @@ DM32UVCodeplug::ZoneElement::link(Zone *zone, Context &ctx, const ErrorStack &er
   for (unsigned int i=0; i<channelCount(); i++) {
     if (! channelIndexValid(i))
       continue;
+    // An empty channel record is not decoded, so a zone may point at no channel.
     if (! ctx.has<Channel>(channelIndex(i))) {
-      errMsg(err) << "Cannot link zone, " << i << "-th channel index " << channelIndex(i)
-                  << " not defined.";
-      return false;
+      logWarn() << "Zone '" << zone->name() << "': channel index " << channelIndex(i)
+                << " is not defined, the entry is dropped.";
+      continue;
     }
     zone->A()->add(ctx.get<Channel>(channelIndex(i)));
   }
@@ -1721,41 +1732,45 @@ DM32UVCodeplug::ScanListElement::decode(Context &ctx, const ErrorStack &err) {
 
 bool
 DM32UVCodeplug::ScanListElement::link(ScanList *lst, Context &ctx, const ErrorStack &err) {
+  Q_UNUSED(err);
+  // An empty channel record is not decoded, so a scan list may point at no channel.
   // Link primary, secondary and revert channels if set
   if (primaryChannelIndexValid()) {
     if (! ctx.has<Channel>(primaryChannelIndex())) {
-      errMsg(err) << "Cannot link primary priority channel for scan list '" << lst->name()
-                  << "': Channel with index " << primaryChannelIndex() << " not defined.";
-      return false;
+      logWarn() << "Scan list '" << lst->name() << "': primary priority channel index "
+                << primaryChannelIndex() << " is not defined, the scan list gets none.";
+    } else {
+      lst->setPrimaryChannel(ctx.get<Channel>(primaryChannelIndex()));
     }
-    lst->setPrimaryChannel(ctx.get<Channel>(primaryChannelIndex()));
   }
 
   if (secondaryChannelIndexValid()) {
     if (! ctx.has<Channel>(secondaryChannelIndex())) {
-      errMsg(err) << "Cannot link secondary priority channel for scan list '" << lst->name()
-      << "': Channel with index " << secondaryChannelIndex() << " not defined.";
-      return false;
+      logWarn() << "Scan list '" << lst->name() << "': secondary priority channel index "
+                << secondaryChannelIndex() << " is not defined, the scan list gets none.";
+    } else {
+      lst->setSecondaryChannel(ctx.get<Channel>(secondaryChannelIndex()));
     }
-    lst->setSecondaryChannel(ctx.get<Channel>(secondaryChannelIndex()));
   }
 
   if (revertChannelIndexValid()) {
     if (! ctx.has<Channel>(revertChannelIndex())) {
-      errMsg(err) << "Cannot link revert channel for scan list '" << lst->name()
-      << "': Channel with index " << revertChannelIndex() << " not defined.";
-      return false;
+      logWarn() << "Scan list '" << lst->name() << "': revert channel index "
+                << revertChannelIndex() << " is not defined, the scan list gets none.";
+    } else {
+      lst->setRevertChannel(ctx.get<Channel>(revertChannelIndex()));
     }
-    lst->setRevertChannel(ctx.get<Channel>(revertChannelIndex()));
   }
 
   for (unsigned int i=0; i<channelCount(); i++) {
     if (isCurrentChannel(i)) {
       lst->addChannel(SelectedChannel::get());
-    } else if (! ctx.has<Channel>(channelIndex(i))) {
-      errMsg(err) << "Cannot link scan list '" << lst->name()
-                  << "': Channel with index " << channelIndex(i) << "not defined";
-      return false;
+      continue;
+    }
+    if (! ctx.has<Channel>(channelIndex(i))) {
+      logWarn() << "Scan list '" << lst->name() << "': channel index " << channelIndex(i)
+                << " is not defined, the entry is dropped.";
+      continue;
     }
     lst->addChannel(ctx.get<Channel>(channelIndex(i)));
   }
@@ -3714,9 +3729,12 @@ DM32UVCodeplug::APRSSettingsElement::link(Context &ctx, const ErrorStack &err) {
   if (revertChannelIsCurrent(0)) {
     aprs->resetRevertChannel();
   } else {
+    // An empty channel record is not decoded, so the revert channel may be undefined.
     if (! ctx.has<Channel>(revertChannelIndex(0))) {
-      errMsg(err) << "Cannot resolve revert channel index " << revertChannelIndex(0) << ".";
-      return false;
+      logWarn() << "Cannot resolve APRS revert channel index " << revertChannelIndex(0)
+                << ", the selected channel is used.";
+      aprs->resetRevertChannel();
+      return true;
     }
     if (! ctx.get<Channel>(revertChannelIndex(0))->is<DMRChannel>()) {
       errMsg(err) << "Revert channel with index " << revertChannelIndex(0) << " must be DMR channel.";
@@ -4411,8 +4429,14 @@ DM32UVCodeplug::decodeChannels(Context &ctx, const ErrorStack &err) {
                     + (0 == blockNumber ? ChannelBankElement::Offset::channelBlock0()
                                         : blockNumber * ChannelBankElement::Offset::betweenChannelBlocks())
                     + indexInBlock * ChannelElement::size();
+    // The CPS may leave an empty record within the channel count; it is no channel.
+    ChannelElement element(data(addr));
+    if (! element.isValid()) {
+      logInfo() << "Channel at index " << i << " is empty, skipped.";
+      continue;
+    }
     // Create channel
-    auto ch = ChannelElement(data(addr)).decode(ctx, err);
+    auto ch = element.decode(ctx, err);
     if (nullptr == ch) {
       errMsg(err) << "Cannot decode channel at index " << i << ".";
       return false;
@@ -4422,8 +4446,10 @@ DM32UVCodeplug::decodeChannels(Context &ctx, const ErrorStack &err) {
     ctx.add(ch, i);
   }
 
-  // Link channel extensions
-  for (unsigned int i=0; i<ctx.count<Channel>(); i++) {
+  // Decode channel extensions, at the index of their channel
+  for (unsigned int i=0; i<bank.channelCount(); i++) {
+    if (! ctx.has<Channel>(i))
+      continue;
     unsigned int blockNumber  = i / ChannelExtensionBankElement::Limit::count();
     unsigned int indexInBlock = i % ChannelExtensionBankElement::Limit::count();
     uint32_t addr = Offset::channelExtensionBanks()
@@ -4449,6 +4475,9 @@ DM32UVCodeplug::linkChannels(Context &ctx, const ErrorStack &err) {
                     + (0 == blockNumber ? ChannelBankElement::Offset::channelBlock0()
                                         : blockNumber * ChannelBankElement::Offset::betweenChannelBlocks())
                     + indexInBlock * ChannelElement::size();
+    // skip empty records
+    if (! ctx.has<Channel>(i))
+      continue;
     // get channel
     auto ch = ctx.get<Channel>(i);
     // link channel
@@ -4459,7 +4488,9 @@ DM32UVCodeplug::linkChannels(Context &ctx, const ErrorStack &err) {
   }
 
   // Link channel extensions
-  for (unsigned int i=0; i<ctx.count<Channel>(); i++) {
+  for (unsigned int i=0; i<bank.channelCount(); i++) {
+    if (! ctx.has<Channel>(i))
+      continue;
     unsigned int blockNumber  = i / ChannelExtensionBankElement::Limit::count();
     unsigned int indexInBlock = i % ChannelExtensionBankElement::Limit::count();
     uint32_t addr = Offset::channelExtensionBanks()
