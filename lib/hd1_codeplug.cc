@@ -406,8 +406,8 @@ HD1Codeplug::ChannelElement::link(Channel *channel, Context &ctx, const ErrorSta
   if (nullptr == dmr)
     return true;
   uint32_t ref = txContact();
-  if ((ref >= ContactRef::base()) && ctx.has<DMRContact>(ref - ContactRef::base()))
-    dmr->setContact(ctx.get<DMRContact>(ref - ContactRef::base()));
+  if ((ref >= ContactRef::txBase()) && ctx.has<DMRContact>(ref - ContactRef::txBase()))
+    dmr->setContact(ctx.get<DMRContact>(ref - ContactRef::txBase()));
   else if ((ContactRef::none() != ref) && (ContactRef::noTXContact() != ref))
     logInfo() << "Channel '" << name() << "': TX contact " << ref
               << " is not a priority contact (address book?), dropped.";
@@ -457,12 +457,12 @@ HD1Codeplug::ChannelElement::encode(const Channel *channel, Context &ctx, const 
       }
     }
     if (dmr->contact()) {
-      setTXContact(ContactRef::base() + ctx.index(dmr->contact()));
+      setTXContact(ContactRef::txBase() + ctx.index(dmr->contact()));
     } else {
       // A reference qdmr cannot represent (address book number, empty contact slot) is kept;
       // a reference to an existing contact is cleared.
       uint32_t ref = txContact();
-      if ((ref >= ContactRef::base()) && (ref - ContactRef::base() < ctx.count<DMRContact>()))
+      if ((ref >= ContactRef::txBase()) && (ref - ContactRef::txBase() < ctx.count<DMRContact>()))
         setTXContact(ContactRef::noTXContact());
     }
     setMembers(dmr->groupList() ? GroupListElement::memberRefs(dmr->groupList(), ctx)

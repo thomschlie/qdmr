@@ -47,8 +47,10 @@ class DMRRadioID;
  * keeps the record of its own slot. A TX contact qdmr cannot represent (an address book
  * number, an empty contact slot) is kept as well.
  *
- * Contacts are referenced as LE32 <tt>100000 + index</tt> (priority contact 1 is 100000), not
- * by DMR ID. A channel does not store which RX group list it uses: the manufacturer's software
+ * Contacts are referenced as LE32 <tt>100000 + index</tt> in member lists (priority contact 1
+ * is 100000), not by DMR ID. A channel's TX contact is one higher, <tt>100001 + index</tt>,
+ * like the 1-based address book number stored there; the radio looks it up as reference - 1.
+ * A channel does not store which RX group list it uses: the manufacturer's software
  * copies the list's members into the channel's own member list. Decoding therefore links a
  * channel to the group list with the same members, or creates one (named after the channel)
  * for a custom member set. Encoding writes every RX group list to the radio's table (the first
@@ -83,6 +85,8 @@ public:
   /** Encodes a contact reference. */
   struct ContactRef {
     static constexpr uint32_t base() { return 100000; }      ///< Reference of priority contact 1.
+    /** TX contact reference of priority contact 1: one higher than in member lists. */
+    static constexpr uint32_t txBase() { return 100001; }
     static constexpr uint32_t none() { return 0xffffffff; }  ///< No contact (member lists).
     /** No TX contact: the manufacturer's software writes 0 (and turns @c none() into 0). */
     static constexpr uint32_t noTXContact() { return 0; }
@@ -98,7 +102,7 @@ public:
    *  <tr><td>0x92</td><td>1</td><td>GPS report contact index, 0 = none</td></tr>
    *  <tr><td>0x94</td><td>4</td><td>RX frequency, BCD LE32 in 10 Hz</td></tr>
    *  <tr><td>0x98</td><td>4</td><td>TX frequency, as RX</td></tr>
-   *  <tr><td>0x9c</td><td>4</td><td>TX contact reference, 0 = none</td></tr>
+   *  <tr><td>0x9c</td><td>4</td><td>TX contact reference (@c ContactRef::txBase() + index), 0 = none</td></tr>
    *  <tr><td>0xa0</td><td>1</td><td>Bit 7 GPS, 6 work alone, 5 VOX, 4 send GPS, 0–3 VOX level − 1</td></tr>
    *  <tr><td>0xa1</td><td>1</td><td>Bit 7 relay, 6 digital, 5 TX below RX, 4 TX above RX, 2–3 power (0 low, 1 mid,
    *    2 high), 1 talkaround, 0 scan add</td></tr>

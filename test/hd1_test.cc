@@ -9,6 +9,7 @@
 #include <QtEndian>
 #include <cstring>
 #include <QTest>
+#include <QDebug>
 
 
 HD1Test::HD1Test(QObject *parent)
@@ -295,12 +296,64 @@ HD1Test::testDanglingContactKept() {
   QVERIFY(dmrIdx >= 0);
   HD1Codeplug::ChannelElement el(codeplug.bankData(HD1Interface::Bulk, 0x1bcc*0x400
                                                    + dmrIdx*HD1Codeplug::ChannelElement::size()));
-  el.setTXContact(HD1Codeplug::ContactRef::base() + 999);  // empty contact slot
+  el.setTXContact(HD1Codeplug::ContactRef::txBase() + 999);  // empty contact slot
   Config config;
   QVERIFY(codeplug.decode(&config, err));
   QVERIFY(nullptr == config.channelList()->channel(dmrIdx)->as<DMRChannel>()->contact());
   QVERIFY2(codeplug.encode(&config, Codeplug::Flags(), err), err.format().toStdString().c_str());
-  QCOMPARE(el.txContact(), HD1Codeplug::ContactRef::base() + 999);
+  QCOMPARE(el.txContact(), HD1Codeplug::ContactRef::txBase() + 999);
+}
+
+void
+HD1Test::testTXContactReference() {
+  // The manufacturer's software stores priority contact n (1-based) as 100000 + n in the TX
+  // contact and as 100000 + n - 1 in member lists; the radio reads the TX contact as ref - 1.
+  ErrorStack err;
+  HD1Codeplug codeplug;
+  QVERIFY2(codeplug.encode(&_basicConfig, Codeplug::Flags(), err), err.format().toStdString().c_str());
+  int checked = 0, inList = 0;
+  for (int i=0; i<_basicConfig.channelList()->count(); i++) {
+    DMRChannel *src = _basicConfig.channelList()->channel(i)->as<DMRChannel>();
+    if ((nullptr == src) || (nullptr == src->contact()))
+      continue;
+    int idx = -1;  // 0-based index among the DMR contacts, as HD1Codeplug::index() counts
+    for (int j=0, d=0; (j<_basicConfig.contacts()->count()) && (idx < 0); j++) {
+      if (DMRContact *c = _basicConfig.contacts()->contact(j)->as<DMRContact>()) {
+        if (c == src->contact())
+          idx = d;
+        d++;
+      }
+    }
+    QVERIFY(idx >= 0);
+    const uint8_t *rec = codeplug.bankData(HD1Interface::Bulk, 0x1bcc*0x400
+                                           + i*HD1Codeplug::ChannelElement::size());
+    QCOMPARE(qFromLittleEndian<uint32_t>(rec + 0x9c), uint32_t(100001 + idx));
+    bool member = false;
+    for (int k=0; src->groupList() && (k<src->groupList()->count()); k++)
+      member |= (src->groupList()->contact(k) == src->contact());
+    if (member) {  // the same contact in the channel's member list is one lower
+      bool found = false;
+      for (unsigned int k=0; k<32; k++)
+        found |= (qFromLittleEndian<uint32_t>(rec + 4*k) == uint32_t(100000 + idx));
+      QVERIFY(found);
+      inList++;
+    }
+    checked++;
+  }
+  QVERIFY(checked > 0);
+  // Decoding finds the same contact again.
+  Config config;
+  QVERIFY2(codeplug.decode(&config, err), err.format().toStdString().c_str());
+  for (int i=0; i<_basicConfig.channelList()->count(); i++) {
+    DMRChannel *src = _basicConfig.channelList()->channel(i)->as<DMRChannel>();
+    if ((nullptr == src) || (nullptr == src->contact()))
+      continue;
+    DMRChannel *dst = config.channelList()->channel(i)->as<DMRChannel>();
+    QVERIFY(dst && dst->contact());
+    QCOMPARE(dst->contact()->name(), src->contact()->name());
+  }
+  if (0 == inList)
+    qInfo() << "testTXContactReference: no channel has its TX contact in its group list";
 }
 
 

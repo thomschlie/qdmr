@@ -43,6 +43,8 @@ private slots:
   void testChannelBitmap();
   /** A new channel's TX contact is what the manufacturer's software writes for none. */
   void testNewChannelTXContact();
+  /** The TX contact is stored one higher than the same contact in a member list. */
+  void testTXContactReference();
 };
 
 #endif // HD1TEST_HH
